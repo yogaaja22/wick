@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
 	"github.com/yogasw/wick/pkg/safeexec"
@@ -99,11 +101,10 @@ func (s Spawner) spawnCompact(ctx context.Context, opt provider.SpawnOptions, bi
 	go func() {
 		err := runCompactRPC(ctx, stdin, stdout, pw, opt.ResumeID)
 		_ = stdin.Close()
+		// app-server is long-lived. Once compaction has completed, stopping it is
+		// intentional and its resulting "signal: killed" is not a turn failure.
 		_ = cmd.Process.Kill()
-		waitErr := cmd.Wait()
-		if err == nil && waitErr != nil && ctx.Err() == nil {
-			err = waitErr
-		}
+		_ = cmd.Wait()
 		_ = pw.CloseWithError(err)
 		p.done <- err
 	}()
@@ -123,12 +124,16 @@ func runCompactRPC(ctx context.Context, in io.Writer, out io.Reader, translated 
 		return err
 	}
 	scanner := bufio.NewScanner(out)
+	// A resumed thread can be returned as one large JSON-RPC line. The scanner
+	// default is only 64 KiB, which is too small for the sessions users compact.
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	pre, post := 0, 0
 	resumed, compactSent, completed := false, false, false
 	start := time.Now()
 	for scanner.Scan() {
 		var m rpcEnvelope
-		if json.Unmarshal(scanner.Bytes(), &m) != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &m); err != nil {
+			log.Debug().Err(err).Int("bytes", len(scanner.Bytes())).Msg("codex compact: ignoring malformed JSON-RPC message")
 			continue
 		}
 		if m.Error != nil {
@@ -156,9 +161,16 @@ func runCompactRPC(ctx context.Context, in io.Writer, out io.Reader, translated 
 		}
 		if completed && m.Method == "turn/completed" {
 			payload := map[string]any{"type": "wick.compaction", "compaction": map[string]any{"trigger": "manual", "pre_tokens": pre, "post_tokens": post, "dropped_tokens": max(0, pre-post), "duration_ms": time.Since(start).Milliseconds()}}
-			b, _ := json.Marshal(payload)
-			_, _ = translated.Write(append(b, '\n'))
-			_, _ = io.WriteString(translated, "{\"type\":\"turn.completed\"}\n")
+			b, err := json.Marshal(payload)
+			if err != nil {
+				return fmt.Errorf("encode compaction event: %w", err)
+			}
+			if _, err := translated.Write(append(b, '\n')); err != nil {
+				return fmt.Errorf("write compaction event: %w", err)
+			}
+			if _, err := io.WriteString(translated, "{\"type\":\"turn.completed\"}\n"); err != nil {
+				return fmt.Errorf("write compaction completion: %w", err)
+			}
 			return nil
 		}
 		select {

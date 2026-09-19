@@ -524,7 +524,12 @@ func (h *Handler) updateNetwork(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := h.configs.Set(r.Context(), configs.KeyDNSServers, r.FormValue("dns_servers")); err != nil {
+	dnsServers := r.FormValue("dns_servers")
+	if dnsServers != "8.8.8.8,8.8.4.4" && dnsServers != "1.1.1.1,1.0.0.1" {
+		http.Error(w, "invalid DNS provider", http.StatusBadRequest)
+		return
+	}
+	if err := h.configs.Set(r.Context(), configs.KeyDNSServers, dnsServers); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
