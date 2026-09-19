@@ -9,6 +9,7 @@ import (
 )
 
 func TestPluginCommandRunsNativeWithDNSOverride(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "test")
 	m := &Manager{dnsServers: func() string { return "8.8.8.8,8.8.4.4" }}
 	cmd := m.pluginCommand(os.Args[0])
 

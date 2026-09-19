@@ -6,7 +6,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
 	"os/exec"
 	"sync"
@@ -16,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 
+	wickenv "github.com/yogasw/wick/internal/pkg/env"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
@@ -234,7 +235,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 // native processes and do not require proot or filesystem bind mounts.
 func (m *Manager) pluginCommand(bin string) *exec.Cmd {
 	cmd := safeexec.Command(bin)
-	if m.dnsServers != nil {
+	if wickenv.IsTermux() && m.dnsServers != nil {
 		cmd.Env = append(os.Environ(), "WICK_DNS_SERVERS="+m.dnsServers())
 	}
 	return cmd
