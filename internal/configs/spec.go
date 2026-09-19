@@ -112,8 +112,7 @@ func appDefaults() []entity.Config {
 		},
 		{
 			Key:         KeyDNSServers,
-			Type:        "dropdown",
-			Options:     "8.8.8.8,8.8.4.4|1.1.1.1,1.0.0.1",
+			Type:        "text",
 			Value:       "8.8.8.8,8.8.4.4",
 			Hidden:      true,
 			Description: "DNS provider for connector plugins on Termux. Defaults to Google DNS. WICK_DNS_SERVERS overrides this value. Restart active plugin processes after changing it.",

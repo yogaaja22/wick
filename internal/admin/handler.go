@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -524,8 +525,28 @@ func (h *Handler) updateNetwork(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	dnsServers := r.FormValue("dns_servers")
-	if dnsServers != "8.8.8.8,8.8.4.4" && dnsServers != "1.1.1.1,1.0.0.1" {
+	var dnsServers string
+	switch r.FormValue("dns_provider") {
+	case "google":
+		dnsServers = "8.8.8.8,8.8.4.4"
+	case "cloudflare":
+		dnsServers = "1.1.1.1,1.0.0.1"
+	case "custom":
+		servers := strings.FieldsFunc(r.FormValue("dns_custom"), func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t' || r == '\n'
+		})
+		if len(servers) == 0 || len(servers) > 4 {
+			http.Error(w, "custom DNS requires 1 to 4 IP addresses", http.StatusBadRequest)
+			return
+		}
+		for _, server := range servers {
+			if net.ParseIP(server) == nil {
+				http.Error(w, "custom DNS contains an invalid IP address", http.StatusBadRequest)
+				return
+			}
+		}
+		dnsServers = strings.Join(servers, ",")
+	default:
 		http.Error(w, "invalid DNS provider", http.StatusBadRequest)
 		return
 	}
