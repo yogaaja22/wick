@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +41,7 @@ type Manager struct {
 	spawnFn      func(key string) (*entry, error)
 	killFn       func(key string)
 	now          func() time.Time
+	dnsServers   func() string
 	stop         chan struct{}
 	cond         *sync.Cond
 	breakers     map[string]*breaker
@@ -206,7 +209,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("no plugin binary registered for %q", key)
 		}
-		clientCfg.Cmd = safeexec.Command(bin)
+		clientCfg.Cmd = m.pluginCommand(bin)
 	}
 	client := goplugin.NewClient(clientCfg)
 	rpc, err := client.Client()
@@ -226,6 +229,50 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	}
 	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
+
+// pluginCommand gives standalone glibc connector plugins the DNS and CA files
+// Termux keeps under $PREFIX. Without these binds Go sees Android's dead
+// /etc/resolv.conf loopback entry and outbound connector calls fail at DNS.
+func (m *Manager) pluginCommand(bin string) *exec.Cmd {
+	prefix := os.Getenv("PREFIX")
+	if prefix == "" {
+		return safeexec.Command(bin)
+	}
+	if _, err := os.Stat("/data/data/com.termux/files/usr"); err != nil {
+		return safeexec.Command(bin)
+	}
+	proot, err := safeexec.ResolveBin("proot")
+	if err != nil {
+		return safeexec.Command(bin)
+	}
+	resolv := prefix + "/etc/resolv.conf"
+	if m.dnsServers != nil {
+		if servers := strings.FieldsFunc(m.dnsServers(), func(r rune) bool { return r == ',' || r == ' ' }); len(servers) > 0 {
+			path := prefix + "/tmp/wick-plugin-resolv.conf"
+			var b strings.Builder
+			for _, server := range servers {
+				b.WriteString("nameserver ")
+				b.WriteString(server)
+				b.WriteByte('\n')
+			}
+			if os.WriteFile(path, []byte(b.String()), 0o600) == nil {
+				resolv = path
+			}
+		}
+	}
+	cmd := safeexec.Command(proot,
+		"-b", resolv+":/etc/resolv.conf",
+		"-b", prefix+"/etc/tls/cert.pem:/etc/ssl/certs/ca-certificates.crt",
+		bin,
+	)
+	if m.dnsServers != nil {
+		cmd.Env = append(os.Environ(), "WICK_DNS_SERVERS="+m.dnsServers())
+	}
+	return cmd
+}
+
+// SetDNSServersLoader supplies the runtime-editable Termux DNS override.
+func (m *Manager) SetDNSServersLoader(fn func() string) { m.dnsServers = fn }
 
 // IsPlugin reports whether key is served by a plugin subprocess.
 func (m *Manager) IsPlugin(key string) bool {
