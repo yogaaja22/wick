@@ -71,7 +71,12 @@ func setupDNS() {
 		return
 	}
 	content, _ := os.ReadFile(resolvConfPath)
-	if hasConfiguredNameserver(string(content)) {
+	configured := hasConfiguredNameserver(string(content))
+	// Android may expose a loopback-only resolver in /etc/resolv.conf even
+	// though no DNS daemon is listening there. In Termux prefer the explicit
+	// plugin resolver unless the file contains a directly reachable server.
+	termuxLoopbackOnly := os.Getenv("PREFIX") != "" && configured && len(usableNameservers(string(content))) == 0
+	if configured && !termuxLoopbackOnly {
 		return
 	}
 	servers := chooseNameservers(os.Getenv("WICK_DNS_SERVERS"), prefixResolvNameservers(), androidNameservers())
